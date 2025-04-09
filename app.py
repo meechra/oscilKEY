@@ -1,12 +1,11 @@
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
-import soundfile as sf
 import hashlib
 import io
-
-from datetime import datetime
 import os
+from datetime import datetime
+import scipy.io.wavfile as wav  # Using SciPy as a replacement for PySoundFile
 
 # ------------------ Utility Functions ------------------
 
@@ -77,7 +76,6 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
       
     Returns a space-separated binary string.
     """
-    # Determine number of samples per tone and gap
     tone_samples = int(sample_rate * tone_duration)
     gap_samples = int(sample_rate * gap_duration)
     segment_length = tone_samples + gap_samples
@@ -136,15 +134,15 @@ def main():
     st.set_page_config(page_title="oscilKEY - Decryption", layout="wide")
     st.title("oscilKEY: Audio Waveform Decryption")
     st.markdown("""
-    **oscilKEY** decrypts an encrypted audio waveform (produced by oscilLOCK) to recover the original text.
+    **oscilKEY** decrypts an encrypted WAV audio waveform (produced by oscilLOCK) to recover the original text.
     
-    Provide the encrypted audio file along with the same encryption parameters and passphrase.
+    Provide the encrypted WAV file along with the same encryption parameters and passphrase.
     """)
     
     st.sidebar.header("Decryption Settings")
     
-    # File upload: Encrypted audio file (WAV, FLAC, OGG)
-    uploaded_file = st.sidebar.file_uploader("Upload Encrypted Audio", type=['wav', 'flac', 'ogg'])
+    # File upload: Encrypted audio file (WAV only)
+    uploaded_file = st.sidebar.file_uploader("Upload Encrypted Audio (WAV)", type=['wav'])
     passphrase = st.sidebar.text_input("Enter Passphrase:", type="password", value="DefaultPassphrase")
     
     st.sidebar.markdown("### Audio Parameters")
@@ -163,12 +161,19 @@ def main():
     sample_rate = st.sidebar.number_input("Sample Rate (Hz)", 8000, 96000, 44100)
     
     if uploaded_file and passphrase:
-        # Read the uploaded audio file
-        waveform, file_sample_rate = sf.read(uploaded_file)
-        # Use file's sample rate if different from selected value
-        if file_sample_rate != sample_rate:
-            st.warning(f"File sample rate ({file_sample_rate} Hz) differs from selected rate ({sample_rate} Hz). Using file's sample rate.")
-            sample_rate = file_sample_rate
+        try:
+            # Read the uploaded WAV file using SciPy
+            sample_rate_file, waveform = wav.read(uploaded_file)
+            # Check sample rate consistency
+            if sample_rate_file != sample_rate:
+                st.warning(f"File sample rate ({sample_rate_file} Hz) differs from selected rate ({sample_rate} Hz). Using file's sample rate.")
+                sample_rate = sample_rate_file
+            # Convert to float in case the file is in integer format (assuming 16-bit PCM)
+            if waveform.dtype == np.int16:
+                waveform = waveform.astype(np.float32) / 32767.0
+        except Exception as e:
+            st.error(f"Error reading audio file: {e}")
+            return
         
         st.subheader("Uploaded Encrypted Audio")
         st.audio(uploaded_file, format='audio/wav')
