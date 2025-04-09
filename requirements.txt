@@ -1,3 +1,4 @@
-streamlit
-numpy
-plotly
+streamlit>=1.10.0
+numpy>=1.21.0
+plotly>=5.0.0
+PySoundFile>=0.10.3.post1
