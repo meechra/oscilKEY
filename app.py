@@ -5,7 +5,7 @@ import hashlib
 import io
 import os
 from datetime import datetime
-import scipy.io.wavfile as wav  # Using SciPy as a replacement for PySoundFile
+import scipy.io.wavfile as wav  # using SciPy to read WAV files
 
 # ------------------ Utility Functions ------------------
 
@@ -62,7 +62,7 @@ def generate_chaotic_sequence_rossler_rk4(n, dt=0.01, a=0.2, b=0.2, c=5.7, x0=0.
     normalized = (sequence - sequence.min()) / (sequence.max() - sequence.min())
     return normalized.tolist()
 
-# ------------------ Decryption Function ------------------
+# ------------------ Decryption Function with Enhanced Frequency Estimation ------------------
 
 def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duration,
                                base_freq, freq_range, chaos_mod_range,
@@ -70,10 +70,10 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
     """
     Decrypt the provided audio waveform (encrypted via oscilLOCK) by:
       1. Segmenting the waveform into tone portions (based on tone/gap durations).
-      2. Estimating the tone frequency (via FFT) for each segment.
+      2. Estimating the tone frequency using zero-padding and parabolic interpolation.
       3. Reconstructing the chaotic sequence from the passphrase and parameters.
       4. Removing the chaotic modulation and inverting the mapping to recover bytes.
-      
+    
     Returns a space-separated binary string.
     """
     tone_samples = int(sample_rate * tone_duration)
@@ -82,7 +82,7 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
     total_samples = len(waveform)
     n_segments = total_samples // segment_length
 
-    # Derive chaotic initial conditions from the passphrase and regenerate chaotic sequence
+    # Regenerate the chaotic sequence using derived initial conditions
     x0, y0, z0 = derive_initial_conditions(passphrase)
     chaotic_sequence = generate_chaotic_sequence_rossler_rk4(n_segments, dt=dt, a=a, b=b, c=c,
                                                              x0=x0, y0=y0, z0=z0)
@@ -93,26 +93,43 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
         end = start + tone_samples
         tone_segment = waveform[start:end]
         
-        # Estimate frequency using FFT with a Hann window for improved accuracy.
+        # Apply Hann window to the tone segment
         N_tone = len(tone_segment)
         window = np.hanning(N_tone)
-        fft_result = np.fft.rfft(tone_segment * window)
+        windowed_tone = tone_segment * window
+
+        # Zero-pad the tone to increase FFT resolution (e.g., 4 times the length)
+        n_fft = int(2**np.ceil(np.log2(N_tone)) * 4)
+        fft_result = np.fft.rfft(windowed_tone, n=n_fft)
         fft_magnitude = np.abs(fft_result)
+
+        # Find the peak index in the FFT result
         peak_index = np.argmax(fft_magnitude)
-        freq_resolution = sample_rate / N_tone
-        observed_freq = peak_index * freq_resolution
+
+        # Parabolic interpolation to refine the peak frequency estimate
+        if 0 < peak_index < len(fft_magnitude)-1:
+            alpha = fft_magnitude[peak_index - 1]
+            beta = fft_magnitude[peak_index]
+            gamma = fft_magnitude[peak_index + 1]
+            # Calculate the adjustment (p)
+            p = 0.5 * (alpha - gamma) / (alpha - 2*beta + gamma)
+        else:
+            p = 0
+        peak_index_adjusted = peak_index + p
+
+        freq_resolution = sample_rate / n_fft
+        observed_freq = peak_index_adjusted * freq_resolution
         
-        # Remove the chaotic offset
+        # Remove chaotic modulation using the regenerated chaotic sequence
         chaotic_offset = chaotic_sequence[i] * chaos_mod_range
         plain_freq = observed_freq - chaotic_offset
         
-        # Invert the mapping:
-        #   plain_freq = base_freq + (byte_value/255)*freq_range
+        # Invert the mapping: plain_freq = base_freq + (byte_value/255)*freq_range
         byte_value = (plain_freq - base_freq) / freq_range * 255
         byte_value = int(np.rint(byte_value))
         byte_value = max(0, min(255, byte_value))
         
-        # Convert byte to an 8-bit binary string.
+        # Convert the recovered byte into its 8-bit binary representation.
         byte_binary = format(byte_value, '08b')
         binary_list.append(byte_binary)
     
