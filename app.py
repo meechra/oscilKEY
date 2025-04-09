@@ -1,14 +1,12 @@
 import os
-# Set the SNDFILE_LIB path before importing soundfile.
-os.environ["SNDFILE_LIB"] = "/usr/lib/x86_64-linux-gnu/libsndfile.so.1"
-
 import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
-import soundfile as sf
 import hashlib
+import wave
+import struct
 from datetime import datetime
 
 # ------------------ Module 1: Data Preprocessing ------------------
@@ -46,11 +44,10 @@ def grouped_binary_to_waveform_plain(binary_str, sample_rate=44100, tone_duratio
         gap_samples = int(sample_rate * gap_duration)
         gap = np.zeros(gap_samples, dtype=np.float32)
         waveform = np.concatenate((waveform, tone, gap))
-        
     time_vector = np.linspace(0, len(waveform) / sample_rate, len(waveform), endpoint=False)
     return waveform, time_vector
 
-# ------------------ Module 3: Chaotic Function Integration using RK4 for Rossler Attractor ------------------
+# ------------------ Module 3: Chaotic Integration using RK4 (Rossler Attractor) ------------------
 def rossler_derivatives(state, a, b, c):
     """Compute the derivatives for the Rossler attractor given state = [x, y, z]."""
     x, y, z = state
@@ -108,14 +105,34 @@ def grouped_binary_to_waveform_chaotic(binary_str, sample_rate=44100, tone_durat
         gap_samples = int(sample_rate * gap_duration)
         gap = np.zeros(gap_samples, dtype=np.float32)
         waveform = np.concatenate((waveform, tone, gap))
-    
     time_vector = np.linspace(0, len(waveform) / sample_rate, len(waveform), endpoint=False)
     return waveform, time_vector
 
-# ------------------ Audio Synthesis and Storage Module ------------------
+# ------------------ Audio Synthesis and Storage Module (Using built-in wave module) ------------------
+def convert_waveform_to_audio_bytes(waveform, sample_rate, file_format="WAV"):
+    """
+    Convert a numpy waveform (assumed to be in float32 in the range [-1,1]) 
+    to audio bytes using the built-in wave module.
+    
+    This avoids the dependency on PySoundFile and libsndfile.
+    """
+    # First, convert the waveform to 16-bit PCM values.
+    # Scale from [-1, 1] to [-32767, 32767]
+    scaled_waveform = np.int16(waveform * 32767)
+    buf = io.BytesIO()
+    # The wave module only writes WAV files, so file_format is ignored for now.
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)          # mono audio
+        wf.setsampwidth(2)          # 2 bytes per sample for int16
+        wf.setframerate(sample_rate)
+        wf.writeframes(scaled_waveform.tobytes())
+    buf.seek(0)
+    return buf.getvalue()
+
 def synthesize_and_store_audio(waveform, sample_rate=44100, filename_prefix="oscilLOCK_audio", file_format="WAV"):
     """
     Convert a waveform (NumPy array) into an audio file and save it locally.
+    This version uses the built-in wave module.
     Returns the full file path.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -124,7 +141,9 @@ def synthesize_and_store_audio(waveform, sample_rate=44100, filename_prefix="osc
     if not os.path.exists(storage_dir):
         os.makedirs(storage_dir)
     full_path = os.path.join(storage_dir, filename)
-    sf.write(full_path, waveform, sample_rate, format=file_format)
+    audio_bytes = convert_waveform_to_audio_bytes(waveform, sample_rate, file_format=file_format)
+    with open(full_path, "wb") as f:
+        f.write(audio_bytes)
     return full_path
 
 # ------------------ Visualization Functions ------------------
@@ -169,12 +188,6 @@ def create_chaotic_phase_plot(binary_str, dt=0.01, a=0.2, b=0.2, c=5.7, x0=0.1, 
     fig = go.Figure(data=go.Scatter(x=x_vals, y=y_vals, mode='markers', marker=dict(color='red', size=8)))
     fig.update_layout(title="Chaotic Phase Plot", xaxis_title="x[i]", yaxis_title="x[i+1]")
     return fig
-
-def convert_waveform_to_audio_bytes(waveform, sample_rate, file_format="WAV"):
-    """Convert a numpy waveform to audio bytes for playback in the specified format."""
-    buf = io.BytesIO()
-    sf.write(buf, waveform, sample_rate, format=file_format)
-    return buf.getvalue()
 
 # ------------------ Additional Visualization Functions for Key Generation ------------------
 def get_audio_feature_values(waveform, num_samples=128):
@@ -311,15 +324,13 @@ def main():
                 dt=dt, a=a, b=b, c=c, x0=derived_x0, y0=derived_y0, z0=derived_z0
             )
             
-            # Key Generation: Use chaotic_params (dt, a, b, c) and user-selected num_chaotic_samples
+            # Key Generation: Use chaotic_params and user-selected num_chaotic_samples
             chaotic_params = (dt, a, b, c)
             derived_key, chaotic_sequence = generate_chaotic_key(passphrase, waveform_encoded, chaotic_params, num_chaotic_samples)
             
-            # Extract audio features for key generation visualization
+            # Extract audio feature values for key generation visualization
             audio_features = get_audio_feature_values(waveform_encoded, num_samples=num_chaotic_samples)
             
-            # Prepare encrypted audio bytes for download (format will be selected in Storage tab)
-        
         # Create tabs for the pipeline (5 tabs)
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "Preprocessing & Encoding", 
