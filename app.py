@@ -104,7 +104,7 @@ def inverse_xor_chain(chained_bytes, iv):
 # ------------------------------------------------------------------
 def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duration,
                                base_freq, freq_range, chaos_mod_range,
-                               dt, a, b, c, passphrase):
+                               dt, a, b, c, passphrase, debug=False):
     """
     Decrypt the provided audio waveform (encrypted via oscilLOCK) to recover a binary string.
     Steps:
@@ -117,8 +117,8 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
     tone_samples = int(sample_rate * tone_duration)
     gap_samples  = int(sample_rate * gap_duration)
     segment_length = tone_samples + gap_samples
-    total_samples  = len(waveform)
-    n_segments   = total_samples // segment_length
+    total_samples = len(waveform)
+    n_segments = total_samples // segment_length
 
     # Regenerate chaotic sequence using derived initial conditions
     x0, y0, z0 = derive_initial_conditions(passphrase)
@@ -128,21 +128,20 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
     binary_list = []
     for i in range(n_segments):
         start = i * segment_length
-        end   = start + tone_samples
+        end = start + tone_samples
         tone_segment = waveform[start:end]
         
-        # Apply Hann window to tone segment
+        # Apply a Hann window to reduce spectral leakage
         N = len(tone_segment)
         window = np.hanning(N)
         windowed = tone_segment * window
 
-        # Zero-pad for high resolution FFT
-        n_fft = int(2**np.ceil(np.log2(N)) * 4)
+        # Zero-pad for higher resolution FFT; increased padding factor (×8)
+        n_fft = int(2**np.ceil(np.log2(N)) * 8)
         fft_res = np.fft.rfft(windowed, n=n_fft)
         fft_mag = np.abs(fft_res)
 
         peak_index = np.argmax(fft_mag)
-        # Parabolic interpolation for peak refinement
         if 0 < peak_index < len(fft_mag) - 1:
             alpha = fft_mag[peak_index - 1]
             beta  = fft_mag[peak_index]
@@ -163,14 +162,18 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
         byte_val = int(np.rint(byte_val))
         byte_val = max(0, min(255, byte_val))
         
+        if debug:
+            st.write(f"Segment {i}: observed_freq={observed_freq:.2f} Hz, "
+                     f"chaotic_offset={chaotic_offset:.2f}, plain_freq={plain_freq:.2f} Hz, "
+                     f"byte_val={byte_val}")
+            
         binary_byte = format(byte_val, '08b')
         binary_list.append(binary_byte)
     
-    # Return the binary string (still potentially in XOR-chained form)
     return " ".join(binary_list)
 
 # ------------------------------------------------------------------
-# Streamlit UI (Decryption Only; Including XOR Chaining Toggle)
+# Streamlit UI (Decryption Only; Including XOR Chaining Toggle & Debug Mode)
 # ------------------------------------------------------------------
 def main():
     st.set_page_config(page_title="oscilKEY - Decryption", layout="wide")
@@ -181,6 +184,7 @@ def main():
     uploaded_file = st.sidebar.file_uploader("Upload Encrypted Audio (WAV)", type=["wav"])
     passphrase = st.sidebar.text_input("Enter Passphrase:", type="password", value="DefaultPassphrase")
     xor_toggle = st.sidebar.checkbox("Enable XOR Chaining", value=True)
+    debug_toggle = st.sidebar.checkbox("Enable Debug Mode (Show internal estimates)", value=False)
     enter_button = st.sidebar.button("Enter")
     
     if uploaded_file and passphrase and enter_button:
@@ -198,14 +202,15 @@ def main():
             waveform, sample_rate_file,
             tone_duration=TONE_DURATION, gap_duration=GAP_DURATION,
             base_freq=BASE_FREQ, freq_range=FREQ_RANGE, chaos_mod_range=CHAOS_MOD_RANGE,
-            dt=DT, a=A_PARAM, b=B_PARAM, c=C_PARAM, passphrase=passphrase
+            dt=DT, a=A_PARAM, b=B_PARAM, c=C_PARAM, passphrase=passphrase,
+            debug=debug_toggle
         )
         
         # If XOR chaining was used during encryption, undo the chaining
         if xor_toggle:
             # Convert recovered binary string to list of integers
             int_bytes = [int(b, 2) for b in binary_output.split()]
-            # Derive IV from the passphrase (same as in encryption)
+            # Derive the IV from the passphrase (same derivation as encryption)
             iv = int(hashlib.sha256(passphrase.encode()).hexdigest()[:2], 16)
             original_int_bytes = inverse_xor_chain(int_bytes, iv)
             # Reconstruct the binary string from the recovered integers
