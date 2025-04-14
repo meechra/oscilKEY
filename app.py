@@ -81,6 +81,25 @@ def generate_chaotic_sequence_rossler_rk4(n, dt=DT, a=A_PARAM, b=B_PARAM, c=C_PA
     return normalized.tolist()
 
 # ------------------------------------------------------------------
+# Helper Function for Inverse XOR Chaining
+# ------------------------------------------------------------------
+def inverse_xor_chain(chained_bytes, iv):
+    """
+    Invert the XOR chaining to recover the original plaintext bytes.
+    
+    :param chained_bytes: List of XOR chained 8-bit integers.
+    :param iv: Initialization vector used during encryption.
+    :return: List of original plaintext byte values.
+    """
+    recovered_bytes = []
+    prev = iv
+    for chained_byte in chained_bytes:
+        original_byte = chained_byte ^ prev
+        recovered_bytes.append(original_byte)
+        prev = chained_byte
+    return recovered_bytes
+
+# ------------------------------------------------------------------
 # Decryption Function
 # ------------------------------------------------------------------
 def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duration,
@@ -123,7 +142,7 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
         fft_mag = np.abs(fft_res)
 
         peak_index = np.argmax(fft_mag)
-        # Parabolic interpolation
+        # Parabolic interpolation for peak refinement
         if 0 < peak_index < len(fft_mag) - 1:
             alpha = fft_mag[peak_index - 1]
             beta  = fft_mag[peak_index]
@@ -147,10 +166,11 @@ def decrypt_waveform_to_binary(waveform, sample_rate, tone_duration, gap_duratio
         binary_byte = format(byte_val, '08b')
         binary_list.append(binary_byte)
     
+    # Return the binary string (still potentially in XOR-chained form)
     return " ".join(binary_list)
 
 # ------------------------------------------------------------------
-# Streamlit UI (Decryption Only; No Visualization)
+# Streamlit UI (Decryption Only; Including XOR Chaining Toggle)
 # ------------------------------------------------------------------
 def main():
     st.set_page_config(page_title="oscilKEY - Decryption", layout="wide")
@@ -160,6 +180,7 @@ def main():
     st.sidebar.header("Decryption Settings")
     uploaded_file = st.sidebar.file_uploader("Upload Encrypted Audio (WAV)", type=["wav"])
     passphrase = st.sidebar.text_input("Enter Passphrase:", type="password", value="DefaultPassphrase")
+    xor_toggle = st.sidebar.checkbox("Enable XOR Chaining", value=True)
     enter_button = st.sidebar.button("Enter")
     
     if uploaded_file and passphrase and enter_button:
@@ -179,6 +200,17 @@ def main():
             base_freq=BASE_FREQ, freq_range=FREQ_RANGE, chaos_mod_range=CHAOS_MOD_RANGE,
             dt=DT, a=A_PARAM, b=B_PARAM, c=C_PARAM, passphrase=passphrase
         )
+        
+        # If XOR chaining was used during encryption, undo the chaining
+        if xor_toggle:
+            # Convert recovered binary string to list of integers
+            int_bytes = [int(b, 2) for b in binary_output.split()]
+            # Derive IV from the passphrase (same as in encryption)
+            iv = int(hashlib.sha256(passphrase.encode()).hexdigest()[:2], 16)
+            original_int_bytes = inverse_xor_chain(int_bytes, iv)
+            # Reconstruct the binary string from the recovered integers
+            binary_output = " ".join(format(b, '08b') for b in original_int_bytes)
+        
         recovered_text = binary_to_text(binary_output)
         
         st.subheader("Decryption Output")
